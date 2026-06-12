@@ -1,0 +1,186 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model CodeVersion {
+  id        String   @id @default(cuid())
+  name      String
+  version   String
+  code      String
+  sha256    String
+  createdAt DateTime @default(now())
+
+  @@unique([name, version])
+  @@index([name])
+}
+
+model CodeWorkspace {
+  id              String                 @id @default(cuid())
+  slug            String
+  name            String
+  description     String                 @default("")
+  language        String                 @default("typescript")
+  currentVersion  Int                    @default(0)
+  active          Boolean                @default(true)
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+  createdByUserId String
+  updatedByUserId String
+  versions        CodeWorkspaceVersion[]
+
+  @@unique([createdByUserId, slug])
+  @@index([slug])
+}
+
+model CodeWorkspaceVersion {
+  id              String        @id @default(cuid())
+  workspaceId     String
+  version         Int
+  snapshot        String
+  snapshotHash    String
+  message         String        @default("")
+  isAutosave      Boolean       @default(false)
+  clientRequestId String?
+  ip              String?
+  userAgent       String?
+  referer         String?
+  meta            String        @default("{}")
+  sizeBytes       Int           @default(0)
+  createdAt       DateTime      @default(now())
+  createdByUserId String
+  workspace       CodeWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  jobs            CodeJob[]
+
+  @@unique([workspaceId, version])
+  @@unique([workspaceId, clientRequestId])
+  @@index([workspaceId, createdAt])
+  @@index([snapshotHash])
+}
+
+model CodeWorker {
+  id            String       @id @default(cuid())
+  name          String
+  kind          String       @default("deno")
+  queue         String       @default("default")
+  status        String       @default("offline")
+  desiredStatus String       @default("running")
+  concurrency   Int          @default(1)
+  currentJobId  String?
+  heartbeatAt   DateTime?
+  startedAt     DateTime?
+  stoppedAt     DateTime?
+  pid           Int?
+  metadata      String       @default("{}")
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  jobs          CodeJob[]
+  logs          CodeJobLog[]
+
+  @@index([queue, status])
+  @@index([status, heartbeatAt])
+}
+
+model CodeJob {
+  id                 String               @id @default(cuid())
+  workspaceVersionId String
+  workspaceSlug      String
+  version            Int
+  entryPath          String
+  functionName       String
+  args               String               @default("[]")
+  data               String               @default("null")
+  checkpoint         String               @default("null")
+  result             String?
+  error              String?
+  status             String               @default("queued")
+  priority           Int                  @default(0)
+  queue              String               @default("default")
+  runtime            String               @default("deno")
+  orchestrator       String               @default("deno-worker")
+  timeoutMs          Int                  @default(30000)
+  maxAttempts        Int                  @default(3)
+  attempt            Int                  @default(0)
+  progress           Int                  @default(0)
+  requestedAction    String?
+  leaseToken         String?
+  lockedAt           DateTime?
+  leaseExpiresAt     DateTime?
+  nextRunAt          DateTime             @default(now())
+  startedAt          DateTime?
+  completedAt        DateTime?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  createdByUserId    String               @default("local-dev")
+  workerId           String?
+  temporalWorkflowId String?
+  temporalRunId      String?
+  metadata           String               @default("{}")
+  workspaceVersion   CodeWorkspaceVersion @relation(fields: [workspaceVersionId], references: [id], onDelete: Cascade)
+  worker             CodeWorker?          @relation(fields: [workerId], references: [id], onDelete: SetNull)
+  logs               CodeJobLog[]
+
+  @@index([queue, status, nextRunAt])
+  @@index([status, nextRunAt, priority])
+  @@index([workerId, status])
+  @@index([workspaceVersionId, createdAt])
+  @@index([leaseExpiresAt])
+}
+
+model CodeJobLog {
+  id        Int         @id @default(autoincrement())
+  jobId     String
+  workerId  String?
+  level     String      @default("info")
+  message   String
+  sequence  Int         @default(0)
+  meta      String      @default("{}")
+  createdAt DateTime    @default(now())
+  job       CodeJob     @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  worker    CodeWorker? @relation(fields: [workerId], references: [id], onDelete: SetNull)
+
+  @@index([jobId, createdAt])
+  @@index([level, createdAt])
+}
+
+model JobRecord {
+  jobId                String    @id
+  status               String
+  codeName             String
+  codeVersion          String
+  request              Json
+  requestHash          String
+  requestSchemaVersion Int       @default(1)
+  result               Json?
+  errorType            String?
+  runnerId             Int?
+  attempts             Int       @default(0)
+  queuedAt             DateTime  @default(now())
+  startedAt            DateTime?
+  heartbeatAt          DateTime?
+  finishedAt           DateTime?
+
+  @@index([status])
+  @@index([codeName, codeVersion])
+  @@index([requestHash])
+  @@index([queuedAt])
+  @@index([startedAt])
+}
+
+model LogRecord {
+  id        String   @id @default(cuid())
+  ts        DateTime
+  level     String
+  event     String
+  service   String
+  fields    Json
+  createdAt DateTime @default(now())
+
+  @@index([ts])
+  @@index([level])
+  @@index([event])
+  @@index([createdAt])
+}
