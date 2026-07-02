@@ -1,8 +1,14 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { join } from "node:path";
 import type { AppConfig } from "./config.js";
+import { querySavedConnection } from "./db-service.js";
 import * as logger from "./logger.js";
-import type { DenoPoolJob, DenoPoolResult } from "./types.js";
+import type {
+  DbQueryRequestMessage,
+  DbQueryResponseMessage,
+  DenoPoolJob,
+  DenoPoolResult,
+} from "./types.js";
 
 type RunOptions = {
   queueTimeoutMs: number;
@@ -180,7 +186,14 @@ class DenoRunnerProcess {
       }
 
       try {
-        const result = JSON.parse(line) as DenoPoolResult;
+        const message = JSON.parse(line) as DenoPoolResult | DbQueryRequestMessage;
+
+        if (isDbQueryRequest(message)) {
+          void this.handleDbQuery(message);
+          continue;
+        }
+
+        const result = message;
 
         if (result.jobId !== this.current.jobId) {
           throw new Error(
@@ -202,6 +215,62 @@ class DenoRunnerProcess {
         this.child?.kill("SIGKILL");
       }
     }
+  }
+
+  private async handleDbQuery(message: DbQueryRequestMessage) {
+    logger.info("deno.runner.db_query.started", {
+      runnerId: this.id,
+      jobId: message.jobId,
+      requestId: message.requestId,
+      code: message.code,
+      queryLength: message.query.length,
+      paramsKind: Array.isArray(message.params)
+        ? "array"
+        : message.params && typeof message.params === "object"
+          ? "object"
+          : "none",
+    });
+
+    let response: DbQueryResponseMessage;
+    try {
+      const result = await querySavedConnection(
+        message.code,
+        message.query,
+        message.params,
+        message.timeoutMs,
+      );
+      response = {
+        type: "db.response",
+        requestId: message.requestId,
+        ok: true,
+        result,
+      };
+    } catch (error) {
+      logger.error("deno.runner.db_query.failed", {
+        runnerId: this.id,
+        jobId: message.jobId,
+        requestId: message.requestId,
+        code: message.code,
+        error: logger.serializeLogError(error),
+      });
+      response = {
+        type: "db.response",
+        requestId: message.requestId,
+        ok: false,
+        error: serializeDbQueryError(error),
+      };
+    }
+
+    this.child?.stdin.write(JSON.stringify(response) + "\n", (error) => {
+      if (error) {
+        logger.error("deno.runner.db_response_write_failed", {
+          runnerId: this.id,
+          jobId: message.jobId,
+          requestId: message.requestId,
+          error: logger.serializeLogError(error),
+        });
+      }
+    });
   }
 
   run(job: DenoPoolJob): Promise<DenoPoolResult> {
@@ -534,4 +603,35 @@ function makePoolBusyResult(jobId: string, message: string): DenoPoolResult {
     logs: [],
     durationMs: 0,
   };
+}
+
+function isDbQueryRequest(value: DenoPoolResult | DbQueryRequestMessage): value is DbQueryRequestMessage {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "type" in value &&
+    value.type === "db.query"
+  );
+}
+
+function serializeDbQueryError(error: unknown) {
+  if (error instanceof Error) {
+    return {
+      type: error.name || "DB_QUERY_ERROR",
+      message: error.message,
+      retryable: getErrorRetryability(error),
+    };
+  }
+
+  return {
+    type: "DB_QUERY_ERROR",
+    message: String(error),
+    retryable: false,
+  };
+}
+
+function getErrorRetryability(error: Error) {
+  const retryable = (error as Error & { retryable?: unknown }).retryable;
+  if (typeof retryable === "boolean") return retryable;
+  return false;
 }

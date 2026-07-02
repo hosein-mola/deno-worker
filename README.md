@@ -4,6 +4,7 @@ HTTP service for running user-provided JavaScript/TypeScript code inside a pool 
 
 ## Prerequisites
 
+- `nvm` is installed; use it to activate a compatible Node.js version before running `npm` commands.
 - Node.js 24.x, or any Node.js version compatible with the installed Prisma and TypeScript dependencies.
 - npm.
 - Deno 2.x available on `PATH`.
@@ -12,6 +13,9 @@ HTTP service for running user-provided JavaScript/TypeScript code inside a pool 
 Check the important tools:
 
 ```sh
+nvm version
+nvm list
+nvm use <version>
 node --version
 npm --version
 deno --version
@@ -68,6 +72,13 @@ Environment variables:
 | `DENO_POOL_SIZE` | `4` | Number of long-lived Deno runner processes. |
 | `DENO_QUEUE_TIMEOUT_MS` | `5000` | How long `/run` waits for an idle runner before returning retryable `POOL_BUSY`. |
 | `RUNNER_RESPONSE_GRACE_MS` | `1000` | Extra parent-side timeout after a job timeout before killing a stuck runner. |
+| `DENO_WORKER_REUSE` | `true` | Reuse warm sandbox workers inside each runner for matching permission profiles. Set to `false` for fresh-worker isolation. |
+| `CODE_VERSION_CACHE_TTL_MS` | `60000` | In-memory TTL for loaded code versions used by repeated `codeRef` calls. Set to `0` to disable. |
+| `CODE_VERSION_CACHE_MAX` | `1000` | Maximum loaded code versions kept in memory. |
+| `DB_WORKER_POOL_SIZE` | `4` | Number of Node worker threads used for saved SQL connection queries requested by sandboxed code. |
+| `DB_QUERY_QUEUE_TIMEOUT_MS` | `5000` | How long a SQL query waits for an idle DB worker before returning a retryable DB queue timeout. |
+| `DB_QUERY_QUEUE_LIMIT` | `1000` | Maximum queued SQL queries before new SQL work is rejected with a retryable queue-full error. |
+| `DB_CONNECTION_CACHE_TTL_MS` | `10000` | Short-lived cache for active saved DB connection metadata; set to `0` to disable. |
 | `SHUTDOWN_GRACE_MS` | `30000` | How long shutdown waits for active jobs before killing runners. |
 | `MAX_REQUEST_BYTES` | `1048576` | Maximum accepted JSON request body size. |
 | `ALLOW_INHERIT_PERMISSIONS` | local only | Set to `true` to allow `"permissions": "inherit"` when `NODE_ENV=production`. |

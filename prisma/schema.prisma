@@ -184,3 +184,20 @@ model LogRecord {
   @@index([event])
   @@index([createdAt])
 }
+
+model DbConnection {
+  id               String    @id @default(cuid())
+  code             String    @unique
+  name             String
+  description      String    @default("")
+  provider         String    @default("mssql")
+  connectionString String
+  active           Boolean   @default(true)
+  lastTestAt       DateTime?
+  lastTestOk       Boolean?
+  lastTestMessage  String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([active])
+}

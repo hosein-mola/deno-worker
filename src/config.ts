@@ -5,6 +5,10 @@ export type AppConfig = {
   queueTimeoutMs: number;
   shutdownGraceMs: number;
   runnerResponseGraceMs: number;
+  dbWorkerPoolSize: number;
+  dbQueryQueueTimeoutMs: number;
+  dbQueryQueueLimit: number;
+  dbConnectionCacheTtlMs: number;
   allowInheritPermissions: boolean;
   openApiEnabled: boolean;
   openApiJsonPath: string;
@@ -15,7 +19,7 @@ export type AppConfig = {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   return {
-    port: readInteger(env.PORT, 3000, { min: 1, max: 65535 }),
+    port: readInteger(env.PORT, 3001, { min: 1, max: 65535 }),
     poolSize: readInteger(env.DENO_POOL_SIZE, 4, { min: 1, max: 128 }),
     maxRequestBytes: readInteger(env.MAX_REQUEST_BYTES, 1_048_576, {
       min: 1024,
@@ -32,6 +36,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     runnerResponseGraceMs: readInteger(env.RUNNER_RESPONSE_GRACE_MS, 1_000, {
       min: 0,
       max: 30_000,
+    }),
+    dbWorkerPoolSize: readInteger(env.DB_WORKER_POOL_SIZE, 4, {
+      min: 1,
+      max: 128,
+    }),
+    dbQueryQueueTimeoutMs: readInteger(env.DB_QUERY_QUEUE_TIMEOUT_MS, 5_000, {
+      min: 0,
+      max: 300_000,
+    }),
+    dbQueryQueueLimit: readInteger(env.DB_QUERY_QUEUE_LIMIT, 1_000, {
+      min: 1,
+      max: 100_000,
+    }),
+    dbConnectionCacheTtlMs: readInteger(env.DB_CONNECTION_CACHE_TTL_MS, 10_000, {
+      min: 0,
+      max: 300_000,
     }),
     allowInheritPermissions:
       env.ALLOW_INHERIT_PERMISSIONS === "true" || env.NODE_ENV !== "production",

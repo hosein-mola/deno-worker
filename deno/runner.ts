@@ -23,7 +23,42 @@ type DenoPoolJob = {
   timeoutMs: number;
 };
 
+type DbQueryRequestMessage = {
+  type: "db.query";
+  requestId: string;
+  jobId: string;
+  code: string;
+  query: string;
+  params?: unknown[] | Record<string, unknown> | null;
+  timeoutMs?: number;
+};
+
+type DbQueryResponseMessage = {
+  type: "db.response";
+  requestId: string;
+  ok: boolean;
+  result?: unknown;
+  error?: {
+    type: string;
+    message: string;
+    retryable: boolean;
+  };
+};
+
 const encoder = new TextEncoder();
+const workerUrl = new URL("./user-worker.ts", import.meta.url);
+const reuseWorkers = Deno.env.get("DENO_WORKER_REUSE") !== "false";
+const pendingDbResponses = new Map<
+  string,
+  {
+    resolve: (value: DbQueryResponseMessage) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }
+>();
+let sandbox: {
+  worker: Worker;
+  sandboxKey: string;
+} | null = null;
 
 function writeJsonLine(value: unknown) {
   Deno.stdout.writeSync(encoder.encode(JSON.stringify(value) + "\n"));
@@ -64,23 +99,61 @@ function serializeInfraError(error: unknown) {
   };
 }
 
+function writeDbQueryRequest(value: DbQueryRequestMessage) {
+  writeJsonLine(value);
+}
+
+function waitForDbResponse(requestId: string, timeoutMs: number) {
+  return new Promise<DbQueryResponseMessage>((resolve) => {
+    const timer = setTimeout(() => {
+      pendingDbResponses.delete(requestId);
+      resolve({
+        type: "db.response",
+        requestId,
+        ok: false,
+        error: {
+          type: "DB_QUERY_TIMEOUT",
+          message: `DB query did not respond within ${timeoutMs}ms`,
+          retryable: true,
+        },
+      });
+    }, timeoutMs);
+
+    pendingDbResponses.set(requestId, {
+      resolve,
+      timer,
+    });
+  });
+}
+
+function resolveDbResponse(message: DbQueryResponseMessage) {
+  const pending = pendingDbResponses.get(message.requestId);
+  if (!pending) return false;
+
+  clearTimeout(pending.timer);
+  pendingDbResponses.delete(message.requestId);
+  pending.resolve(message);
+  return true;
+}
+
 async function runJob(job: DenoPoolJob) {
   return await new Promise((resolve) => {
-    const workerUrl = new URL("./user-worker.ts", import.meta.url);
-
     let settled = false;
+    const startedAt = Date.now();
+    const permissionKey = getPermissionKey(job.permissions);
+    const sandboxKey = getSandboxKey(job, permissionKey);
     let worker: Worker | null = null;
 
-    const startedAt = Date.now();
-
-    const finish = (value: unknown) => {
+    const finish = (value: unknown, keepWorker = true) => {
       if (settled) return;
 
       settled = true;
       clearTimeout(timeout);
 
-      if (worker) {
-        worker.terminate();
+      if (!reuseWorkers) {
+        worker?.terminate();
+      } else if (!keepWorker) {
+        terminateSandbox();
       }
 
       resolve(value);
@@ -97,19 +170,28 @@ async function runJob(job: DenoPoolJob) {
         },
         logs: [],
         durationMs: Date.now() - startedAt,
-      });
+      }, false);
     }, job.timeoutMs);
 
     try {
-      worker = new Worker(workerUrl, {
-        type: "module",
-        deno: {
-          permissions: normalizePermissions(job.permissions),
-        },
-      } as WorkerOptions);
+      worker = getSandboxWorker(job.permissions, sandboxKey);
 
       worker.onmessage = (event) => {
-        finish(event.data);
+        if (isDbQueryRequest(event.data)) {
+          const request = event.data;
+          writeDbQueryRequest(request);
+          void waitForDbResponse(
+            request.requestId,
+            request.timeoutMs ?? job.timeoutMs,
+          ).then(
+            (response) => {
+              if (!settled) worker?.postMessage(response);
+            },
+          );
+          return;
+        }
+
+        finish(event.data, true);
       };
 
       worker.onerror = (event) => {
@@ -123,7 +205,7 @@ async function runJob(job: DenoPoolJob) {
           },
           logs: [],
           durationMs: Date.now() - startedAt,
-        });
+        }, false);
       };
 
       worker.onmessageerror = () => {
@@ -137,7 +219,7 @@ async function runJob(job: DenoPoolJob) {
           },
           logs: [],
           durationMs: Date.now() - startedAt,
-        });
+        }, false);
       };
 
       worker.postMessage(job);
@@ -148,9 +230,59 @@ async function runJob(job: DenoPoolJob) {
         error: serializeInfraError(error),
         logs: [],
         durationMs: Date.now() - startedAt,
-      });
+      }, false);
     }
   });
+}
+
+function getSandboxWorker(permissions: PermissionSpec, sandboxKey: string) {
+  if (reuseWorkers && sandbox?.sandboxKey === sandboxKey) {
+    return sandbox.worker;
+  }
+
+  terminateSandbox();
+
+  const worker = new Worker(workerUrl, {
+    type: "module",
+    deno: {
+      permissions: normalizePermissions(permissions),
+    },
+  } as WorkerOptions);
+
+  if (reuseWorkers) {
+    sandbox = {
+      worker,
+      sandboxKey,
+    };
+  }
+
+  return worker;
+}
+
+function terminateSandbox() {
+  if (!sandbox) return;
+  sandbox.worker.terminate();
+  sandbox = null;
+}
+
+function getPermissionKey(input: PermissionSpec) {
+  return stableStringify(normalizePermissions(input));
+}
+
+function getSandboxKey(job: DenoPoolJob, permissionKey: string) {
+  return `${permissionKey}\0${job.codeName}\0${job.codeVersion}\0${job.code}`;
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+
+  const object = value as Record<string, unknown>;
+  return `{${Object.keys(object)
+    .filter((key) => object[key] !== undefined)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableStringify(object[key])}`)
+    .join(",")}}`;
 }
 
 async function* readStdinLines(): AsyncGenerator<string> {
@@ -190,14 +322,51 @@ async function* readStdinLines(): AsyncGenerator<string> {
 }
 
 async function main() {
+  let running: Promise<unknown> | null = null;
+
   for await (const line of readStdinLines()) {
     if (!line.trim()) continue;
 
     try {
-      const job = JSON.parse(line) as DenoPoolJob;
-      const result = await runJob(job);
+      const message = JSON.parse(line) as DenoPoolJob | DbQueryResponseMessage;
 
-      writeJsonLine(result);
+      if (isDbQueryResponse(message)) {
+        resolveDbResponse(message);
+        continue;
+      }
+
+      if (running) {
+        writeJsonLine({
+          jobId: message.jobId ?? "unknown",
+          success: false,
+          error: {
+            type: "DENO_RUNNER_BUSY",
+            message: "Runner received a new job while another job is running",
+            retryable: true,
+          },
+          logs: [],
+          durationMs: 0,
+        });
+        continue;
+      }
+
+      const job = message as DenoPoolJob;
+      running = runJob(job)
+        .then((result) => {
+          writeJsonLine(result);
+        })
+        .catch((error) => {
+          writeJsonLine({
+            jobId: job.jobId,
+            success: false,
+            error: serializeInfraError(error),
+            logs: [],
+            durationMs: 0,
+          });
+        })
+        .finally(() => {
+          running = null;
+        });
     } catch (error) {
       writeJsonLine({
         jobId: "unknown",
@@ -211,3 +380,21 @@ async function main() {
 }
 
 main();
+
+function isDbQueryRequest(value: unknown): value is DbQueryRequestMessage {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "type" in value &&
+    (value as { type?: unknown }).type === "db.query"
+  );
+}
+
+function isDbQueryResponse(value: unknown): value is DbQueryResponseMessage {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "type" in value &&
+    (value as { type?: unknown }).type === "db.response"
+  );
+}

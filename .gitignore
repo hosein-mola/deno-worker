@@ -26,11 +26,19 @@ pnpm-debug.log*
 coverage/
 .nyc_output/
 
-# Prisma
-prisma/dev.db
-prisma/dev.db-journal
-prisma/*.db
-prisma/*.db-journal
+# Local SQLite databases
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-journal
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-shm
+*.sqlite3-wal
 
 # Deno cache (if you're using Deno)
 .deno/
@@ -55,11 +63,3 @@ playwright-report/
 # Misc
 .cache/
 .eslintcache
-data/*.db
-data/*.db-journal
-node_modules/
-data/*.db
-data/*.db-journal
-node_modules/
-data/*.db
-data/*.db-journal

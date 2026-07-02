@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import * as esbuild from "esbuild";
 
 export type BuildRequest = {
@@ -18,6 +19,8 @@ export type BuildResponse =
       error: string;
       warnings: string[];
     };
+
+const require = createRequire(import.meta.url);
 
 export async function buildBundle(payload: BuildRequest): Promise<BuildResponse> {
   const entryPath = normalizePath(payload.entryPath);
@@ -78,6 +81,12 @@ export async function buildBundle(payload: BuildRequest): Promise<BuildResponse>
                 };
               }
 
+              if (isBundledPackage(request)) {
+                return {
+                  path: require.resolve(request),
+                };
+              }
+
               return {
                 path: request,
                 external: true,
@@ -118,6 +127,10 @@ export async function buildBundle(payload: BuildRequest): Promise<BuildResponse>
       warnings: [],
     };
   }
+}
+
+function isBundledPackage(request: string) {
+  return request === "persian-date" || request.startsWith("persian-date/");
 }
 
 function normalizePath(path: string): string {

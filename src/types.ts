@@ -98,3 +98,25 @@ export type DenoPoolResult = {
   }>;
   durationMs: number;
 };
+
+export type DbQueryRequestMessage = {
+  type: "db.query";
+  requestId: string;
+  jobId: string;
+  code: string;
+  query: string;
+  params?: unknown[] | Record<string, unknown> | null;
+  timeoutMs?: number;
+};
+
+export type DbQueryResponseMessage = {
+  type: "db.response";
+  requestId: string;
+  ok: boolean;
+  result?: unknown;
+  error?: {
+    type: string;
+    message: string;
+    retryable: boolean;
+  };
+};

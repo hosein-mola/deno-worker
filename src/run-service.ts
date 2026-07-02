@@ -67,6 +67,10 @@ export class RunService {
       ...body,
       timeoutMs,
       functionName,
+      metadata: {
+        ...body.metadata,
+        resolvedCodeSha256: stored.sha256,
+      },
     });
 
     const jobStart = await createQueuedJobRecord({

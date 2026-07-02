@@ -192,7 +192,10 @@ const loadWorkspace: RequestHandler = async (req, res) => {
       name: workspace.name,
       description: workspace.description,
       language: workspace.language,
-      currentVersion: workspace.currentVersion,
+      currentVersion: Math.max(
+        workspace.currentVersion,
+        versions[0]?.version ?? 0,
+      ),
       updatedAt: workspace.updatedAt,
     },
     latest,
@@ -344,7 +347,12 @@ const saveWorkspaceVersion: RequestHandler = async (req, res) => {
       throw new HttpError(400, "message is required to publish a version");
     }
 
-    const version = ws.currentVersion + 1;
+    const latest = await tx.codeWorkspaceVersion.findFirst({
+      where: { workspaceId: ws.id },
+      orderBy: { version: "desc" },
+      select: { version: true },
+    });
+    const version = Math.max(ws.currentVersion, latest?.version ?? 0) + 1;
     const row = await tx.codeWorkspaceVersion.create({
       data: {
         workspaceId: ws.id,
@@ -594,6 +602,10 @@ const listCodeJobs: RequestHandler = async (_req, res) => {
     logs,
     workspaces: workspaces.map((workspace) => ({
       ...workspace,
+      currentVersion: Math.max(
+        workspace.currentVersion,
+        workspace.versions[0]?.version ?? 0,
+      ),
       versions: workspace.versions.map((version) => ({
         id: version.id,
         version: version.version,
@@ -928,6 +940,7 @@ function listAvailableBundleEntries(metaValue: unknown) {
 }
 
 function prepareCodeForRemoteModuleImport(code: string, functionName: string) {
+  if (hasEsmExport(code, functionName)) return code;
   if (!/\bmodule\.exports\b|\bexports\.[A-Za-z_$]/.test(code)) return code;
   if (!/^[A-Za-z_$][0-9A-Za-z_$]*$/.test(functionName)) return code;
   const exportKey = JSON.stringify(functionName);
@@ -940,6 +953,19 @@ function prepareCodeForRemoteModuleImport(code: string, functionName: string) {
     `const __runnerExport = module.exports?.[${exportKey}] ?? exports?.[${exportKey}];`,
     `export { __runnerExport as ${functionName} };`,
   ].join("\n");
+}
+
+function hasEsmExport(code: string, functionName: string) {
+  const escaped = escapeRegExp(functionName);
+  return (
+    new RegExp(`\\bexport\\s+(?:async\\s+)?function\\s+${escaped}\\b`).test(code) ||
+    new RegExp(`\\bexport\\s+(?:const|let|var)\\s+${escaped}\\b`).test(code) ||
+    new RegExp(`\\bexport\\s*\\{[^}]*\\b${escaped}\\b[^}]*\\}`).test(code)
+  );
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function countJobs(jobs: Array<{ status: string }>) {

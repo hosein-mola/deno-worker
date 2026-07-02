@@ -5,6 +5,11 @@ import express, {
 } from "express";
 import type { AppConfig } from "./config.js";
 import { DenoPool } from "./deno-pool.js";
+import {
+  closeDbQueryRuntime,
+  configureDbQueryRuntime,
+  mountDbConnectionApi,
+} from "./db-service.js";
 import { HttpError, serializeError } from "./errors.js";
 import * as logger from "./logger.js";
 import { createOpenApiDocument, createSwaggerHtml } from "./openapi.js";
@@ -13,6 +18,7 @@ import type { RunHttpRequest } from "./types.js";
 import { mountWorkspaceApi } from "./workspace-api.js";
 
 export function createApp(config: AppConfig) {
+  configureDbQueryRuntime(config);
   const pool = new DenoPool(config);
   const runService = new RunService(pool, config);
   const app = express();
@@ -59,6 +65,7 @@ export function createApp(config: AppConfig) {
   );
 
   mountWorkspaceApi(app, runService);
+  mountDbConnectionApi(app);
 
   if (config.openApiEnabled) {
     const openApiDocument = createOpenApiDocument(config);
@@ -83,7 +90,10 @@ export function createApp(config: AppConfig) {
 
   return {
     app,
-    close: (graceMs: number) => pool.close(graceMs),
+    close: async (graceMs: number) => {
+      await pool.close(graceMs);
+      await closeDbQueryRuntime();
+    },
   };
 }
 
